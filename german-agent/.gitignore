@@ -1,0 +1,29 @@
+# Environment variables (NEVER commit)
+.env
+
+# Database files
+*.db
+data/
+
+# Uploaded PDFs
+pdfs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Docker override
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
