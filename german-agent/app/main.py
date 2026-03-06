@@ -19,6 +19,7 @@ from app.database.models import (  # noqa: E402
     Vocabulary,
 )
 from app.agents.lesson_ingest import ingest_lesson  # noqa: E402
+from app.agents.vocab_driller import generate_quiz, process_answer, SessionStats  # noqa: E402
 from app.services.signals import parse_detail  # noqa: E402
 
 logging.basicConfig(
@@ -90,8 +91,8 @@ def health_check(db: Session = Depends(get_db)):
             "lessons_count": lessons_count,
             "vocab_count": vocab_count,
             "active_signals": signals_count,
-            "agents_active": 1,  # lesson_ingest is live after Phase 1
-            "phase": "phase_1",
+            "agents_active": 2,  # lesson_ingest + vocab_driller live after Phase 2
+            "phase": "phase_2",
         }
     except Exception as exc:
         logger.error("Health check DB query failed: %s", exc)
@@ -302,3 +303,80 @@ def context_recent(db: Session = Depends(get_db)):
         "active_signals": active_signals,
         "weak_areas": weak_areas,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/vocab/quiz
+# ---------------------------------------------------------------------------
+
+@app.get("/api/vocab/quiz")
+def vocab_quiz(
+    chapter: int | None = None,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a vocabulary quiz.
+
+    Query params:
+      - chapter: (optional) restrict to a specific chapter number
+      - limit:   number of questions to return (default 10)
+
+    Returns:
+      {
+        "questions": [...],
+        "total_due": int,
+        "signal_adjustments": [str, ...]
+      }
+    """
+    if limit < 1 or limit > 50:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 50")
+
+    try:
+        result = generate_quiz(db=db, chapter=chapter, limit=limit)
+    except Exception as exc:
+        logger.exception("Quiz generation failed")
+        raise HTTPException(status_code=500, detail=f"Quiz generation failed: {exc}")
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# POST /api/vocab/answer
+# ---------------------------------------------------------------------------
+
+class AnswerRequest(BaseModel):
+    question_id: int
+    user_answer: str
+    session_stats: SessionStats | None = None
+
+
+@app.post("/api/vocab/answer")
+async def vocab_answer(body: AnswerRequest, db: Session = Depends(get_db)):
+    """
+    Submit an answer for a quiz question.
+
+    Body:
+      {
+        "question_id": 42,
+        "user_answer": "apple",
+        "session_stats": { ... }   // pass back what the previous response returned
+      }
+
+    Returns an AnswerResult with the updated session_stats for n8n to store
+    and pass into the next call.
+    """
+    try:
+        result = await process_answer(
+            db=db,
+            question_id=body.question_id,
+            user_answer=body.user_answer,
+            session_stats=body.session_stats,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Answer processing failed for question_id=%d", body.question_id)
+        raise HTTPException(status_code=500, detail=f"Answer processing failed: {exc}")
+
+    return result
