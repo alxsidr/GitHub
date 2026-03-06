@@ -2,7 +2,7 @@ import logging
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TypedDict
+from typing_extensions import TypedDict
 
 from sqlalchemy.orm import Session
 
