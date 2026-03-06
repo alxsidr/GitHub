@@ -10,7 +10,7 @@ services:
       - german-pdfs:/app/pdfs
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - DATABASE_URL=sqlite:///app/data/german.db
+      - DATABASE_URL=sqlite:////app/data/german.db
       - API_SECRET_KEY=${API_SECRET_KEY}
       - PONS_API_KEY=${PONS_API_KEY}
     healthcheck:

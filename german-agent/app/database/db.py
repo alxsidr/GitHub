@@ -1,11 +1,22 @@
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from pathlib import Path
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.engine.url import make_url
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///app/data/german.db")
+# 4 slashes = absolute path inside the container: sqlite:////app/data/german.db
+# 3 slashes = relative path from CWD, which would resolve incorrectly inside Docker
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////app/data/german.db")
+
+# For SQLite, ensure the parent directory exists before the engine tries to open the file
+if DATABASE_URL.startswith("sqlite"):
+    _db_file = make_url(DATABASE_URL).database  # e.g. "/app/data/german.db"
+    if _db_file and _db_file != ":memory:":
+        Path(_db_file).parent.mkdir(parents=True, exist_ok=True)
 
 # SQLite needs connect_args to work correctly with FastAPI's thread model
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
