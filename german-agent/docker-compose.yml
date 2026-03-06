@@ -14,18 +14,12 @@ services:
       - API_SECRET_KEY=${API_SECRET_KEY}
       - PONS_API_KEY=${PONS_API_KEY}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
-    networks:
-      - n8n-fcnf-n8n-1
 
 volumes:
   german-data:
   german-pdfs:
-
-networks:
-  n8n-fcnf-n8n-1:
-    external: true
