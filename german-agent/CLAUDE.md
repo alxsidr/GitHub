@@ -2,7 +2,7 @@
 
 ## Overview
 
-A personal German A1 learning system with 5 AI agents accessible via Telegram, orchestrated by n8n, powered by a Python FastAPI backend calling Claude API. Lesson content is auto-synced from OneDrive for Business. Agents share context through a cross-agent learning signal loop (informed by Knowledge Explorer, CSCW 2025).
+A personal German learning system with 6 AI agents accessible via Telegram, orchestrated by n8n, powered by a Python FastAPI backend calling Claude API. Lesson content is auto-synced from OneDrive for Business. Exam prep materials live in a dedicated OneDrive subfolder. Agents share context through a cross-agent learning signal loop (informed by Knowledge Explorer, CSCW 2025). Level-agnostic design — works for A1 through B2+ by swapping uploaded materials.
 
 ## Architecture
 
@@ -66,9 +66,10 @@ german-agent/
 │   │   ├── vocab_driller.py     # Phase 2: Spaced repetition + signal-aware quizzes
 │   │   ├── corrector.py         # Phase 3: Sentence correction + mistake typing + signals
 │   │   ├── review.py            # Phase 3: Weak spots quiz from cross-agent signals
-│   │   ├── conversation.py      # Phase 4: Scenario roleplay + signal-driven topic selection
-│   │   ├── hint.py              # Phase 4: Generate 3 hint replies for stuck users
-│   │   └── news_digest.py       # Phase 5: Simplify text using storytelling + curriculum context
+│   │   ├── exam_prep.py         # Phase 4: Exam simulation — Lesen, Schreiben, Hören, Sprechen
+│   │   ├── conversation.py      # Phase 5: Scenario roleplay + signal-driven topic selection
+│   │   ├── hint.py              # Phase 5: Generate 3 hint replies for stuck users
+│   │   └── news_digest.py       # Phase 6: Simplify text using storytelling + curriculum context
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── claude_client.py     # Anthropic API wrapper (shared by all agents)
@@ -77,12 +78,15 @@ german-agent/
 │   │   └── signals.py           # Learning signals read/write service
 │   ├── database/
 │   │   ├── __init__.py
-│   │   ├── models.py            # All 10 SQLAlchemy models
+│   │   ├── models.py            # All 13 SQLAlchemy models
 │   │   └── db.py                # Database engine, session factory, init
 │   └── prompts/
 │       ├── ingest.txt           # System prompt: structured decomposition from PDF
 │       ├── corrector.txt        # System prompt: correct German + classify errors
 │       ├── review.txt           # System prompt: generate weak-spot exercises
+│       ├── exam_lesen.txt       # System prompt: evaluate reading comprehension answers
+│       ├── exam_schreiben.txt   # System prompt: evaluate writing against exam criteria
+│       ├── exam_sprechen.txt    # System prompt: evaluate speaking response as examiner
 │       ├── conversation.txt     # System prompt: A1 roleplay scenarios
 │       ├── hint.txt             # System prompt: generate 3 A1 reply suggestions
 │       └── simplifier.txt       # System prompt: storytelling with curriculum context
@@ -94,7 +98,7 @@ german-agent/
 └── README.md
 ```
 
-## Database Schema (10 tables)
+## Database Schema (13 tables)
 
 ### lessons
 Tracks ingested PDFs.
@@ -103,7 +107,7 @@ id              INTEGER PRIMARY KEY
 filename        TEXT UNIQUE NOT NULL
 chapter_number  INTEGER
 topic           TEXT
-type            TEXT CHECK(type IN ('textbook', 'workbook', 'extra', 'test'))
+type            TEXT CHECK(type IN ('textbook', 'workbook', 'extra', 'test', 'exam_lesen', 'exam_schreiben', 'exam_hoeren', 'exam_sprechen'))
 raw_text        TEXT
 ingested_at     DATETIME DEFAULT CURRENT_TIMESTAMP
 ```
@@ -220,6 +224,50 @@ consumed        BOOLEAN DEFAULT FALSE
 - `hint_needed` — Conversation Bot writes when user requests hint, includes vocabulary area
 - `topic_mastered` — Vocab Driller writes when user scores >90% consistently on a topic
 - `scenario_completed` — Conversation Bot writes with performance details
+- `exam_section_weak` — Exam Prep writes when user scores below passing in a section
+- `exam_section_strong` — Exam Prep writes when user passes a section consistently
+- `exam_writing_errors` — Exam Prep writes with specific writing weaknesses found
+
+### exam_materials
+Ingested exam preparation materials organized by section.
+```sql
+id              INTEGER PRIMARY KEY
+lesson_id       INTEGER REFERENCES lessons(id)
+section         TEXT CHECK(section IN ('lesen', 'schreiben', 'hoeren', 'sprechen')) NOT NULL
+material_type   TEXT CHECK(material_type IN ('text_passage', 'question_set', 'writing_prompt', 'audio_reference', 'speaking_card', 'answer_key'))
+content_json    TEXT NOT NULL
+source_filename TEXT
+difficulty      TEXT CHECK(difficulty IN ('easy', 'medium', 'hard')) DEFAULT 'medium'
+```
+
+### exam_sessions
+Tracks exam practice sessions (individual sections or full mock exams).
+```sql
+id              INTEGER PRIMARY KEY
+session_type    TEXT CHECK(session_type IN ('lesen', 'schreiben', 'hoeren', 'sprechen', 'full')) NOT NULL
+started_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+completed_at    DATETIME
+status          TEXT CHECK(status IN ('active', 'completed', 'abandoned')) DEFAULT 'active'
+section_scores  TEXT DEFAULT '{}'
+total_score     REAL
+passing         BOOLEAN
+feedback_json   TEXT
+```
+
+### exam_answers
+Individual answers within an exam session.
+```sql
+id              INTEGER PRIMARY KEY
+session_id      INTEGER REFERENCES exam_sessions(id)
+section         TEXT NOT NULL
+question_number INTEGER
+user_answer     TEXT
+correct_answer  TEXT
+is_correct      BOOLEAN
+score           REAL
+feedback        TEXT
+created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+```
 
 ## API Endpoints
 
@@ -244,29 +292,44 @@ All endpoints accept/return JSON. Authentication via `X-API-Key` header matching
 |--------|------|-------------|
 | POST | `/api/correct` | Receive German text, return correction + explanation + error_type, log to mistakes table, write learning signal if pattern detected |
 | GET | `/api/review` | Generate quiz from top 3 mistake types in past 7 days + cross-agent signals, return 5 targeted exercises |
-| GET | `/api/progress?days=7` | Weekly stats: words learned, common mistakes, hint usage, cross-agent signal analysis, weak areas |
+| GET | `/api/progress?days=7` | Weekly stats: words learned, common mistakes, hint usage, exam scores, cross-agent signal analysis, weak areas |
 
-### Phase 4: Conversation Bot + Hints
+### Phase 4: Exam Prep
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/exam/ingest` | Receive exam PDF + section type, parse into structured questions/prompts, store in exam_materials |
+| POST | `/api/exam/start` | Start exam session — specify section (lesen/schreiben/hoeren/sprechen) or 'full' for mock exam |
+| POST | `/api/exam/answer` | Submit answer for current question, get immediate feedback + score |
+| POST | `/api/exam/evaluate-writing` | Submit writing response, Claude evaluates against exam criteria (task completion, grammar, vocabulary, format) |
+| POST | `/api/exam/evaluate-speaking` | Submit speaking response (text for now), Claude evaluates as examiner |
+| GET | `/api/exam/score` | Get exam practice history — scores by section, trends, pass/fail rates |
+| GET | `/api/exam/next` | Get next question in active session |
+
+### Phase 5: Conversation Bot + Hints
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/talk/start` | Start new scenario (informed by learning signals for weak areas), return scenario description + first bot message |
 | POST | `/api/talk/reply` | Receive user reply + session_id, return bot response + optional feedback |
-| POST | `/api/talk/hint` | Receive session_id, return 3 suggested A1-level replies based on current context, log hint usage + write signal |
+| POST | `/api/talk/hint` | Receive session_id, return 3 suggested replies based on current context, log hint usage + write signal |
 
-### Phase 5: Simple German Daily
+### Phase 6: Simple German Daily
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/news/generate` | Receive raw news text, return A1-simplified story woven from recent lessons + vocab + signals, with vocab list and comprehension question |
+| POST | `/api/news/generate` | Receive raw news text, return simplified story woven from recent lessons + vocab + signals, with vocab list and comprehension question |
 
 ## Cross-Agent Signal Flow
 
 ```
 Sentence Corrector  →  Vocab Driller       : Article errors → increase article questions
 Sentence Corrector  →  Conversation Bot    : Dativ struggles → Dativ-heavy scenarios
+Sentence Corrector  →  Exam Prep           : Grammar weakness → target in writing evaluation
 Vocab Driller       →  Simple German Daily : Low Perfekt score → Perfekt-focused story
+Vocab Driller       →  Conversation Bot    : Chapter mastered → unlock harder scenarios
 Conversation Bot    →  Vocab Driller       : Food hint needed → resurface food vocabulary
 Conversation Bot    →  Progress Report     : No hints used → highlight achievement
-Vocab Driller       →  Conversation Bot    : Chapter mastered → unlock harder scenarios
+Exam Prep           →  Vocab Driller       : Weak reading vocab → boost those words
+Exam Prep           →  Sentence Corrector  : Writing errors → focus corrections on those patterns
+Exam Prep           →  Conversation Bot    : Weak speaking → more conversation practice
 ```
 
 Signals are stored in `learning_signals` table with `consumed` flag. Each agent queries unconsumed signals relevant to it before generating responses. After processing, signals are marked consumed.
@@ -324,8 +387,9 @@ networks:
 1. **Phase 1** (Week 1): OneDrive Sync + Decomposition + Signals DB → see `specs/phase1.md`
 2. **Phase 2** (Week 2): Vocab Driller (signal-aware) → see `specs/phase2.md`
 3. **Phase 3** (Week 3): Sentence Corrector + Review + Signals → see `specs/phase3.md`
-4. **Phase 4** (Week 4): Conversation Bot + Hints + Signal Scenarios → see `specs/phase4.md`
-5. **Phase 5** (Week 5): Simple German Daily (storytelling) → see `specs/phase5.md`
+4. **Phase 4** (Week 4): Exam Prep (Lesen, Schreiben, Hören, Sprechen) → see `specs/phase4-exam.md`
+5. **Phase 5** (Week 5): Conversation Bot + Hints + Signal Scenarios → see `specs/phase5.md`
+6. **Phase 6** (Week 6): Simple German Daily (storytelling) → see `specs/phase6.md`
 
 ## Coding Standards
 
