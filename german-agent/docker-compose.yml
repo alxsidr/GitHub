@@ -19,7 +19,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    networks:
+      - n8n-fcnf-n8n-1
 
 volumes:
   german-data:
   german-pdfs:
+
+networks:
+  n8n-fcnf-n8n-1:
+    external: true
