@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Users/Alex/AppData/Local/Python/bin/python -m mslearn.cli docx \"https://learn.microsoft.com/en-us/training/paths/describe-business-value-microsoft-power-platform/\" -o ./output)",
+      "Bash(/c/Users/Alex/AppData/Local/Python/bin/python -m mslearn.cli audio \"https://learn.microsoft.com/en-us/training/modules/describe-business-value-microsoft-power-platform-services/\" -o ./output)",
+      "Bash(ls -lhR \"c:/Users/Alex/OneDrive - A.Sidorecs & Co/GitHub/ms-learn/output/audio/\")"
+    ]
+  }
+}
